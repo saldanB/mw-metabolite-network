@@ -34,6 +34,62 @@ log = logging.getLogger("mwnetwork.download")
 
 _analysis_ids_cache = JsonDiskCache(config.ANALYSIS_IDS_CACHE_PATH)
 _metabolite_map_cache = JsonDiskCache(config.METABOLITE_MAP_CACHE_PATH)
+_study_metadata_cache = JsonDiskCache(config.STUDY_METADATA_CACHE_PATH)
+_subject_metadata_cache = JsonDiskCache(config.SUBJECT_METADATA_CACHE_PATH)
+
+
+def get_study_metadata(study_id, force_refresh=False):
+    """Look up study-level metadata (title, institute, species, disease, ...)
+    for a STUDY_ID via REST (study/study_id/{ID}/summary), disk-cached."""
+    if not force_refresh and study_id in _study_metadata_cache:
+        return _study_metadata_cache.get(study_id)
+
+    url = f"https://www.metabolomicsworkbench.org/rest/study/study_id/{study_id}/summary"
+    data = get_json(url)
+
+    _study_metadata_cache.set(study_id, data)
+    return data
+
+
+def _parse_factors(factors_str):
+    """Parse MW's 'Key1:value1 | Key2:value2' factors string into a dict."""
+    parsed = {}
+    for pair in (factors_str or "").split("|"):
+        key, sep, value = pair.strip().partition(":")
+        if sep:
+            parsed[key.strip()] = value.strip()
+    return parsed
+
+
+def get_subject_metadata(study_id, force_refresh=False):
+    """
+    Look up per-sample subject/patient metadata (diagnosis, age, gender,
+    disease group, ... -- whatever factors MW curated for the study) for a
+    STUDY_ID via REST (study/study_id/{ID}/factors), disk-cached.
+
+    Returns a DataFrame indexed by local_sample_id (one factor per column,
+    NaN where a given sample's factors didn't include that key), matching
+    the sample_id index used by download_study_data()'s output table so
+    this can be joined onto it directly (e.g. `table.join(subject_df)`).
+    """
+    if not force_refresh and study_id in _subject_metadata_cache:
+        records = _subject_metadata_cache.get(study_id)
+    else:
+        url = f"https://www.metabolomicsworkbench.org/rest/study/study_id/{study_id}/factors"
+        data = get_json(url)
+
+        if not data:
+            records = {}
+        elif "local_sample_id" in data:
+            records = {data["local_sample_id"]: _parse_factors(data.get("factors"))}
+        else:
+            records = {v["local_sample_id"]: _parse_factors(v.get("factors")) for v in data.values()}
+
+        _subject_metadata_cache.set(study_id, records)
+
+    df = pd.DataFrame.from_dict(records, orient="index")
+    df.index.name = "sample_id"
+    return df
 
 
 def get_analysis_ids(study_id, force_refresh=False):

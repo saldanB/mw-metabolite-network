@@ -19,9 +19,12 @@ STUDIES_DIR = CHECKPOINTS / "studies"
 CORRELATIONS_DIR = CHECKPOINTS / "correlations"
 COMBINED_DIR = CHECKPOINTS / "correlations_combined"
 CORE_GRAPH_DIR = CHECKPOINTS / "core_graph"
+NAFLD_ANALYSIS_DIR = CHECKPOINTS / "nafld_analysis"
 
 ANALYSIS_IDS_CACHE_PATH = CACHE_DIR / "get_analysis_ids.json"
 METABOLITE_MAP_CACHE_PATH = CACHE_DIR / "analysis_metabolite_refmet.json"
+STUDY_METADATA_CACHE_PATH = CACHE_DIR / "study_metadata.json"
+SUBJECT_METADATA_CACHE_PATH = CACHE_DIR / "subject_metadata.json"
 REFMET_MATCH_CACHE_PATH = CACHE_DIR / "refmet_match.json"
 REFMET_API_CACHE_PATH = CHECKPOINTS / "refmet_api_cache.json"
 
