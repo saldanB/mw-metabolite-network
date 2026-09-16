@@ -20,6 +20,7 @@ CORRELATIONS_DIR = CHECKPOINTS / "correlations"
 COMBINED_DIR = CHECKPOINTS / "correlations_combined"
 CORE_GRAPH_DIR = CHECKPOINTS / "core_graph"
 NAFLD_ANALYSIS_DIR = CHECKPOINTS / "nafld_analysis"
+NAFLD_SUBGRAPH_DIR = CHECKPOINTS / "nafld_subgraph"
 
 ANALYSIS_IDS_CACHE_PATH = CACHE_DIR / "get_analysis_ids.json"
 METABOLITE_MAP_CACHE_PATH = CACHE_DIR / "analysis_metabolite_refmet.json"
@@ -31,3 +32,4 @@ REFMET_API_CACHE_PATH = CHECKPOINTS / "refmet_api_cache.json"
 POOLED_SUFFIX = "_pooled"
 
 EDGE_FILTER_JS_PATH = Path(__file__).with_name("assets") / "edge_filter.js"
+NAFLD_EDGE_FILTER_JS_PATH = Path(__file__).with_name("assets") / "nafld_edge_filter.js"

@@ -7,7 +7,9 @@ skipped entirely, not written to output) -- with fewer studies there's
 nothing meaningful to pool, and only ~10% of pairs clear a 4-study bar, so
 this also avoids the vast majority of the workload for free.
 
-Filters applied before grouping: n > 3 (matches meta_analysis.MIN_N_FOR_Z --
+Filters applied before grouping: NAFLD studies (nafld_labels.NAFLD_STUDY_IDS --
+disease-specific cohorts, kept out of the general/healthy core network),
+n > 3 (matches meta_analysis.MIN_N_FOR_Z --
 pool_correlations itself drops any study with n <= 3, since Fisher z variance
 1/(n-3) is undefined there; filtering here too keeps a pair's pre-counted
 study count consistent with what pool_correlations will actually use, so a
@@ -26,6 +28,7 @@ import pandas as pd
 
 from . import config
 from .meta_analysis import pool_correlations, MIN_N_FOR_Z
+from .nafld_labels import NAFLD_STUDY_IDS
 
 log = logging.getLogger("mwnetwork.pool")
 
@@ -96,6 +99,13 @@ def pool_method(method, min_studies=4, limit=None, overwrite=False,
         log.info(f"{method}: {out_path} exists, overwrite=True, ignoring cache")
 
     df = pd.read_parquet(combined_path)
+
+    n_before = df["study_id"].nunique()
+    df = df.loc[~df["study_id"].isin(NAFLD_STUDY_IDS)]
+    n_masked = n_before - df["study_id"].nunique()
+    if n_masked:
+        log.info(f"{method}: masked {n_masked} NAFLD study(ies) out of core-network pooling")
+
     df = df.loc[df["n"] > MIN_N_FOR_Z - 1]  # must match what pool_correlations itself will keep
     df = df.loc[df["p_value"].notna()]
     df = df.loc[

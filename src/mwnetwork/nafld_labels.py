@@ -18,6 +18,26 @@ steatosis grade, inflammation grade).
 import numpy as np
 import pandas as pd
 
+# Every study classified as NAFLD-specific during the triage (Classes A-D),
+# regardless of whether it ended up with a usable label in LABEL_SPECS.
+# Class C (unusable) and Class D (different etiology) never appear in
+# LABEL_SPECS, and ST001845 was dropped from LABEL_SPECS (ethnicity-only
+# factor) -- but all of them are still disease-specific NAFLD cohorts, so
+# they must still be kept out of the cross-study "core" correlation network,
+# which is meant to represent general/healthy metabolite relationships, not
+# be skewed by a disease state. Used by pool.py to mask these studies out of
+# core-network pooling.
+NAFLD_STUDY_IDS = frozenset({
+    # Class A -- disease vs healthy
+    "ST000977", "ST001842", "ST001843", "ST002269", "ST002091", "ST001845",
+    # Class B -- severity within disease
+    "ST000916", "ST001964", "ST001710", "ST001711",
+    # Class C -- unusable for a NAFLD contrast
+    "ST001428", "ST001844", "ST000677",
+    # Class D -- related but different etiology
+    "ST002100", "ST004715",
+})
+
 
 def _map(metadata, column, mapping):
     """Map a factor column through a {raw_value: numeric_label} dict; values
