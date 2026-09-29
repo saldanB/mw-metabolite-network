@@ -30,6 +30,15 @@ def _normalize_weights(W):
     if W.ndim != 2 or W.shape[0] != W.shape[1]:
         raise ValueError("W must be a square (N, N) matrix")
     W_sym = (W + W.T) / 2.0
+
+    # A node is never its own neighbour. A non-zero w_ii puts a z_i**2 term --
+    # non-negative by construction -- into every LISA_i and hence into the
+    # global I, inflating exactly the extreme-|z| nodes that get reported as
+    # hotspots. Callers routinely pass a similarity matrix with a unit
+    # diagonal (or a kernel of a distance matrix, whose diagonal maps to the
+    # maximum weight), so zero it here rather than trusting the caller.
+    np.fill_diagonal(W_sym, 0.0)
+
     degree = W_sym.sum(axis=1)
     inv_sqrt_degree = np.divide(
         1.0, np.sqrt(degree), out=np.zeros_like(degree), where=degree > 0
