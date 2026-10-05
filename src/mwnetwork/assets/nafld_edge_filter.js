@@ -188,15 +188,20 @@ gd.on('plotly_legenddoubleclick', function (evt) {
 // Fixed to the viewport (not absolute inside gd's parent), so it sits
 // outside the plot itself, pinned to the bottom-right corner of the page
 // rather than overlapping the figure's legend/nodes.
-var panel = document.createElement('div');
-panel.style.cssText = 'position:fixed; bottom:10px; right:10px; z-index:1000; background:white; ' +
+//
+// The name `controlPanel` is the contract assets/viewer_controls.js looks
+// for: running after this script, it prepends its own edge toggle and search
+// box into this panel rather than creating a second floating box that would
+// land on top of this one.
+var controlPanel = document.createElement('div');
+controlPanel.style.cssText = 'position:fixed; bottom:10px; right:10px; z-index:1000; background:white; ' +
     'border:1px solid #ccc; border-radius:6px; padding:10px 14px; font-family:sans-serif; ' +
     'font-size:12px; max-height:60vh; overflow-y:auto; box-shadow:0 1px 4px rgba(0,0,0,0.2);';
 
 var colorTitle = document.createElement('div');
 colorTitle.textContent = 'Color nodes by';
 colorTitle.style.cssText = 'font-weight:bold; margin-bottom:4px;';
-panel.appendChild(colorTitle);
+controlPanel.appendChild(colorTitle);
 
 [['super_class', 'super_class'], ['tau', 'Kendall tau (weighted)'], ['study', 'study (shared = white)']].forEach(function (pair, i) {
     var mode = pair[0], label_text = pair[1];
@@ -213,13 +218,13 @@ panel.appendChild(colorTitle);
     };
     label.appendChild(radio);
     label.appendChild(document.createTextNode(' ' + label_text));
-    panel.appendChild(label);
+    controlPanel.appendChild(label);
 });
 
 var dsTitle = document.createElement('div');
 dsTitle.textContent = 'Datasets (shown if tested in ANY checked)';
 dsTitle.style.cssText = 'font-weight:bold; margin:10px 0 4px;';
-panel.appendChild(dsTitle);
+controlPanel.appendChild(dsTitle);
 
 var toggleAll = document.createElement('div');
 toggleAll.style.marginBottom = '4px';
@@ -232,7 +237,7 @@ selectNoneBtn.textContent = 'none';
 selectNoneBtn.href = '#';
 toggleAll.appendChild(selectAllBtn);
 toggleAll.appendChild(selectNoneBtn);
-panel.appendChild(toggleAll);
+controlPanel.appendChild(toggleAll);
 
 var checkboxes = [];
 datasetIds.forEach(function (dsId, i) {
@@ -248,7 +253,7 @@ datasetIds.forEach(function (dsId, i) {
     checkboxes.push(cb);
     label.appendChild(cb);
     label.appendChild(document.createTextNode(' ' + dsId));
-    panel.appendChild(label);
+    controlPanel.appendChild(label);
 });
 
 selectAllBtn.onclick = function (e) {
@@ -262,4 +267,4 @@ selectNoneBtn.onclick = function (e) {
     redrawAll();
 };
 
-document.body.appendChild(panel);
+document.body.appendChild(controlPanel);

@@ -34,6 +34,66 @@ BASE_URL = "https://www.metabolomicsworkbench.org/rest/refmet"
 # actually queried, so they're skipped rather than treated as real fields.
 EXTRA_FIELDS = ["kegg_id", "smiles"]
 
+# Cross-reference ID columns of data/refmet.csv, in the order the exported
+# viewers list them on hover. pubchem_cid and chebi_id come back as float64
+# rather than int: their columns contain blanks, which promotes the whole
+# column, so "11622394.0" is what a naive str() yields for a PubChem CID --
+# format_crossref_id exists to undo that.
+CROSSREF_ID_FIELDS = ("kegg_id", "pubchem_cid", "chebi_id", "hmdb_id", "lipidmaps_id", "inchi_key")
+
+CROSSREF_ID_LABELS = {
+    "kegg_id": "KEGG",
+    "pubchem_cid": "PubChem",
+    "chebi_id": "ChEBI",
+    "hmdb_id": "HMDB",
+    "lipidmaps_id": "LIPIDMAPS",
+    "inchi_key": "InChIKey",
+}
+
+# refmet.csv stores ChEBI and PubChem as bare numbers, but they are written
+# with a prefix nearly everywhere else ("CHEBI:17234", "CID 5793"). Searches
+# index both forms so either spelling finds the metabolite.
+CROSSREF_ID_PREFIXES = {"chebi_id": "chebi:", "pubchem_cid": "cid:"}
+
+
+def format_crossref_id(value):
+    """
+    One cross-reference ID as a display string; "" when absent.
+
+    Missing/blank -> "". An integral float -> rendered without the trailing
+    ".0" (see CROSSREF_ID_FIELDS for why floats turn up at all).
+    """
+    if value is None or pd.isna(value):
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def crossref_ids(row):
+    """
+    {field: formatted id} for every cross-reference present in `row` -- a
+    refmet.csv row as a Series or a dict. Absent/blank fields are omitted
+    entirely, so an empty dict means this metabolite has no cross-reference
+    at all.
+    """
+    found = {}
+    for field in CROSSREF_ID_FIELDS:
+        value = format_crossref_id(row.get(field))
+        if value:
+            found[field] = value
+    return found
+
+
+def crossref_id_text(row, sep=" | "):
+    """
+    One-line, human-readable rendering of a row's cross-reference IDs
+    ("KEGG C00031 | PubChem 5793 | ChEBI 17234"), "" if it has none.
+    """
+    return sep.join(
+        f"{CROSSREF_ID_LABELS[field]} {value}" for field, value in crossref_ids(row).items()
+    )
+
 _refmet_match_cache = JsonDiskCache(config.REFMET_MATCH_CACHE_PATH)
 _refmet_api_cache = JsonDiskCache(config.REFMET_API_CACHE_PATH)
 

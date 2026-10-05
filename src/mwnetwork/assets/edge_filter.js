@@ -23,7 +23,14 @@
 // own placeholder, substituted by write_html itself -- left untouched here.
 
 var gd = document.getElementById('{plot_id}');
+var N = __N__;
 var nodeSuperCode = __NODE_SUPERCODE__;
+// per-node position/size, in global node index order. Only the node-search
+// script (assets/viewer_controls.js, appended after this one) reads these --
+// edge filtering itself works off the pre-split edge endpoint arrays below.
+var nodeX = __NODE_X__;
+var nodeY = __NODE_Y__;
+var nodeSize = __NODE_SIZE__;
 var edgeU = __EDGE_U__;
 var edgeV = __EDGE_V__;
 var edgeX0 = __EDGE_X0__;
@@ -35,6 +42,12 @@ var NUM_EDGE_TRACES = 2; // trace 0 = positive-r edges, trace 1 = negative-r edg
 var NUM_SUPER_CLASSES = __NUM_SUPER_CLASSES__;
 
 var superVisible = new Array(NUM_SUPER_CLASSES).fill(true);
+
+// a node is shown iff its super_class is active -- the only filter this
+// viewer has. Part of the contract assets/viewer_controls.js relies on.
+function nodeVisible(i) {
+    return superVisible[nodeSuperCode[i]];
+}
 
 function recomputeEdges() {
     var xPos = [], yPos = [], xNeg = [], yNeg = [];

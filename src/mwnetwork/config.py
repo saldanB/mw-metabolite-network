@@ -33,3 +33,6 @@ POOLED_SUFFIX = "_pooled"
 
 EDGE_FILTER_JS_PATH = Path(__file__).with_name("assets") / "edge_filter.js"
 NAFLD_EDGE_FILTER_JS_PATH = Path(__file__).with_name("assets") / "nafld_edge_filter.js"
+# appended to BOTH viewers' post_script, after their own edge-filter script:
+# the edge show/hide toggle and the node search box
+VIEWER_CONTROLS_JS_PATH = Path(__file__).with_name("assets") / "viewer_controls.js"

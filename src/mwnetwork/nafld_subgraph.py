@@ -22,6 +22,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from . import config
+from .refmet import crossref_id_text
+from .viewer_search import (SEARCH_FIELD_TAGS, highlight_trace,
+                            search_field_index, search_fields)
 
 log = logging.getLogger("mwnetwork.nafld_subgraph")
 
@@ -189,6 +192,7 @@ def export_nafld_html(G, pos, refmet, dataset_membership, out_path, title_suffix
     node_index = {}
     node_supercode = []
     node_x, node_y, node_size, node_tau, node_hover, node_dataset_idx = [], [], [], [], [], []
+    node_search = []
     class_node_indices = []
     palette = px.colors.qualitative.Dark24 + px.colors.qualitative.Light24
     node_traces = []
@@ -203,12 +207,14 @@ def export_nafld_html(G, pos, refmet, dataset_membership, out_path, title_suffix
             x, y = round(float(pos[refmet_id][0]), 4), round(float(pos[refmet_id][1]), 4)
             tau_val = row.nafld_kendall_tau
             tau_text = "n/a" if pd.isna(tau_val) else f"{tau_val:.3f}"
+            ids = crossref_id_text(row)
             hover_text = (
                 f"{refmet_id}<br>{row.refmet_name}<br>super_class: {row.super_class}"
                 f"<br>main_class: {row.main_class}<br>sub_class: {row.sub_class}"
                 f"<br>formula: {row.formula}<br>degree: {row.degree}"
                 f"<br>NAFLD Kendall tau (weighted): {tau_text}"
                 f" (n_studies={row.nafld_n_studies}, total n={row.nafld_total_n})"
+                + (f"<br>{ids}" if ids else "")
             )
             datasets = dataset_membership.get(refmet_id, [])
 
@@ -217,6 +223,7 @@ def export_nafld_html(G, pos, refmet, dataset_membership, out_path, title_suffix
             node_tau.append(None if pd.isna(tau_val) else round(float(tau_val), 4))
             node_hover.append(hover_text)
             node_dataset_idx.append([dataset_index[d] for d in datasets])
+            node_search.append(search_fields(refmet_id, row))
 
             xs.append(x); ys.append(y); hover.append(hover_text); sizes.append(float(row.marker_size))
 
@@ -291,23 +298,25 @@ def export_nafld_html(G, pos, refmet, dataset_membership, out_path, title_suffix
         edge_x1.append(round(float(x1), 4)); edge_y1.append(round(float(y1), 4))
         edge_sign.append(1 if data["r"] >= 0 else 0)
 
-    edge_x_pos = [c for k in range(len(edge_u)) if edge_sign[k] for c in (edge_x0[k], edge_x1[k], None)]
-    edge_y_pos = [c for k in range(len(edge_u)) if edge_sign[k] for c in (edge_y0[k], edge_y1[k], None)]
-    edge_x_neg = [c for k in range(len(edge_u)) if not edge_sign[k] for c in (edge_x0[k], edge_x1[k], None)]
-    edge_y_neg = [c for k in range(len(edge_u)) if not edge_sign[k] for c in (edge_y0[k], edge_y1[k], None)]
-
+    # emitted EMPTY -- edges start hidden and viewer_controls.js fills these
+    # on demand from the edgeX0/edgeY0/... arrays below; see the matching
+    # comment in network.export_html for why that halves the file
     edge_trace_pos = go.Scattergl(
-        x=edge_x_pos, y=edge_y_pos, mode="lines",
+        x=[], y=[], mode="lines",
         line=dict(width=0.5, color="royalblue"), opacity=0.15,
         hoverinfo="skip", showlegend=False,
     )
     edge_trace_neg = go.Scattergl(
-        x=edge_x_neg, y=edge_y_neg, mode="lines",
+        x=[], y=[], mode="lines",
         line=dict(width=0.5, color="crimson"), opacity=0.15,
         hoverinfo="skip", showlegend=False,
     )
 
-    fig = go.Figure(data=[edge_trace_pos, edge_trace_neg] + node_traces + [tau_trace] + study_traces)
+    fig = go.Figure(
+        data=[edge_trace_pos, edge_trace_neg] + node_traces + [tau_trace] + study_traces
+        + [highlight_trace()]
+    )
+    highlight_trace_index = 2 + num_super_classes + 1 + num_study_groups
     fig.update_layout(
         title=f"NAFLD subgraph (core network restricted to NAFLD-tested metabolites){title_suffix}",
         showlegend=True,
@@ -320,10 +329,16 @@ def export_nafld_html(G, pos, refmet, dataset_membership, out_path, title_suffix
         hovermode="closest",
     )
 
-    js_template = config.NAFLD_EDGE_FILTER_JS_PATH.read_text()
+    js_template = (
+        config.NAFLD_EDGE_FILTER_JS_PATH.read_text() + "\n" + config.VIEWER_CONTROLS_JS_PATH.read_text()
+    )
     post_script = (
         js_template
         .replace("__N__", str(len(node_x)))
+        .replace("__NODE_SEARCH__", json.dumps(node_search, separators=(",", ":")))
+        .replace("__SEARCH_FIELD_TAGS__", json.dumps(list(SEARCH_FIELD_TAGS)))
+        .replace("__SEARCH_FIELD_INDEX__", json.dumps(search_field_index(), separators=(",", ":")))
+        .replace("__HIGHLIGHT_TRACE_INDEX__", str(highlight_trace_index))
         .replace("__NUM_SUPER_CLASSES__", str(num_super_classes))
         .replace("__NUM_STUDY_GROUPS__", str(num_study_groups))
         .replace("__NODE_SUPERCODE__", json.dumps(node_supercode, separators=(",", ":")))

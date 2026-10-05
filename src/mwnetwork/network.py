@@ -65,6 +65,9 @@ from scipy.sparse.csgraph import dijkstra
 from sklearn.manifold import TSNE
 
 from . import config
+from .refmet import crossref_id_text
+from .viewer_search import (SEARCH_FIELD_TAGS, highlight_trace,
+                            search_field_index, search_fields)
 
 log = logging.getLogger("mwnetwork.network")
 
@@ -178,26 +181,38 @@ def export_html(G, pos, refmet, out_path, title_suffix=""):
     # a compact integer index + super_class code instead of repeating strings.
     node_index = {}
     node_supercode = []
+    # flat, trace-independent per-node arrays (global node index order), read
+    # by the node-search script to ring and zoom to its hits
+    node_x, node_y, node_size, node_search = [], [], [], []
     palette = px.colors.qualitative.Dark24 + px.colors.qualitative.Light24
     node_traces = []
     for code, (super_class, sub) in enumerate(node_info.groupby("super_class")):
-        xs = [pos[n][0] for n in sub.index]
-        ys = [pos[n][1] for n in sub.index]
-        hover = [
-            f"{refmet_id}<br>{row.refmet_name}<br>super_class: {row.super_class}"
-            f"<br>main_class: {row.main_class}<br>sub_class: {row.sub_class}"
-            f"<br>formula: {row.formula}<br>degree: {row.degree}"
-            for refmet_id, row in sub.iterrows()
-        ]
+        xs, ys, hover, sizes = [], [], [], []
+        for refmet_id, row in sub.iterrows():
+            x, y = round(float(pos[refmet_id][0]), 4), round(float(pos[refmet_id][1]), 4)
+            ids = crossref_id_text(row)
+            hover_text = (
+                f"{refmet_id}<br>{row.refmet_name}<br>super_class: {row.super_class}"
+                f"<br>main_class: {row.main_class}<br>sub_class: {row.sub_class}"
+                f"<br>formula: {row.formula}<br>degree: {row.degree}"
+                + (f"<br>{ids}" if ids else "")
+            )
+
+            node_index[refmet_id] = len(node_supercode)
+            node_supercode.append(code)
+            node_x.append(x)
+            node_y.append(y)
+            node_size.append(round(float(row.marker_size), 2))
+            node_search.append(search_fields(refmet_id, row))
+
+            xs.append(x); ys.append(y); hover.append(hover_text); sizes.append(float(row.marker_size))
+
         node_traces.append(go.Scattergl(
             x=xs, y=ys, mode="markers",
-            marker=dict(size=sub["marker_size"].tolist(), color=palette[code % len(palette)], line=dict(width=0.5, color="white")),
+            marker=dict(size=sizes, color=palette[code % len(palette)], line=dict(width=0.5, color="white")),
             text=hover, hoverinfo="text",
             name=f"{super_class} ({len(sub)})",
         ))
-        for n in sub.index:
-            node_index[n] = len(node_supercode)
-            node_supercode.append(code)
 
     num_super_classes = len(node_traces)
 
@@ -213,24 +228,26 @@ def export_html(G, pos, refmet, out_path, title_suffix=""):
         edge_x1.append(round(float(x1), 4)); edge_y1.append(round(float(y1), 4))
         edge_sign.append(1 if data["r"] >= 0 else 0)
 
-    # initial render: every super_class active, so every edge is drawn
-    edge_x_pos = [c for k in range(len(edge_u)) if edge_sign[k] for c in (edge_x0[k], edge_x1[k], None)]
-    edge_y_pos = [c for k in range(len(edge_u)) if edge_sign[k] for c in (edge_y0[k], edge_y1[k], None)]
-    edge_x_neg = [c for k in range(len(edge_u)) if not edge_sign[k] for c in (edge_x0[k], edge_x1[k], None)]
-    edge_y_neg = [c for k in range(len(edge_u)) if not edge_sign[k] for c in (edge_y0[k], edge_y1[k], None)]
-
+    # Both edge traces are emitted EMPTY: edges start hidden (see
+    # assets/viewer_controls.js -- unfiltered they are a solid mat at this
+    # density), and viewer_controls.js fills them from the edgeX0/edgeY0/...
+    # arrays when the toggle is ticked. Rendering them here instead would put
+    # a second copy of every edge coordinate in the file -- 3 numbers per edge
+    # per axis, which on this graph is the single largest thing in the html --
+    # and make the browser lay out every edge before first paint.
     edge_trace_pos = go.Scattergl(
-        x=edge_x_pos, y=edge_y_pos, mode="lines",
+        x=[], y=[], mode="lines",
         line=dict(width=0.5, color="royalblue"), opacity=0.15,
         hoverinfo="skip", showlegend=False,
     )
     edge_trace_neg = go.Scattergl(
-        x=edge_x_neg, y=edge_y_neg, mode="lines",
+        x=[], y=[], mode="lines",
         line=dict(width=0.5, color="crimson"), opacity=0.15,
         hoverinfo="skip", showlegend=False,
     )
 
-    fig = go.Figure(data=[edge_trace_pos, edge_trace_neg] + node_traces)
+    fig = go.Figure(data=[edge_trace_pos, edge_trace_neg] + node_traces + [highlight_trace()])
+    highlight_trace_index = 2 + num_super_classes
     fig.update_layout(
         title=f"Metabolite correlation network (pooled random-effects r, CI-significant edges only){title_suffix}",
         showlegend=True,
@@ -247,11 +264,21 @@ def export_html(G, pos, refmet, out_path, title_suffix=""):
     # module so it's readable/diffable/editable as plain JS). Only the
     # per-run data is substituted in here; '{plot_id}' is left untouched for
     # plotly's own write_html substitution.
-    js_template = config.EDGE_FILTER_JS_PATH.read_text()
+    js_template = (
+        config.EDGE_FILTER_JS_PATH.read_text() + "\n" + config.VIEWER_CONTROLS_JS_PATH.read_text()
+    )
     post_script = (
         js_template
+        .replace("__N__", str(len(node_x)))
         .replace("__NUM_SUPER_CLASSES__", str(num_super_classes))
         .replace("__NODE_SUPERCODE__", json.dumps(node_supercode, separators=(",", ":")))
+        .replace("__NODE_X__", json.dumps(node_x, separators=(",", ":")))
+        .replace("__NODE_Y__", json.dumps(node_y, separators=(",", ":")))
+        .replace("__NODE_SIZE__", json.dumps(node_size, separators=(",", ":")))
+        .replace("__NODE_SEARCH__", json.dumps(node_search, separators=(",", ":")))
+        .replace("__SEARCH_FIELD_TAGS__", json.dumps(list(SEARCH_FIELD_TAGS)))
+        .replace("__SEARCH_FIELD_INDEX__", json.dumps(search_field_index(), separators=(",", ":")))
+        .replace("__HIGHLIGHT_TRACE_INDEX__", str(highlight_trace_index))
         .replace("__EDGE_U__", json.dumps(edge_u, separators=(",", ":")))
         .replace("__EDGE_V__", json.dumps(edge_v, separators=(",", ":")))
         .replace("__EDGE_X0__", json.dumps(edge_x0, separators=(",", ":")))
