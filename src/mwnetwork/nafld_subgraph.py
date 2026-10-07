@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from statsmodels.stats.multitest import multipletests
 
 from . import config
 from .refmet import crossref_id_text
@@ -91,6 +92,99 @@ def compute_dataset_membership(long_df):
     return valid.groupby("refmet_id")["dataset_id"].apply(lambda s: sorted(set(s)))
 
 
+# Filename the significance-filtered association rows are cached under, next
+# to the subgraph they define. build_nafld_network.py reads it back so the
+# viewer's per-dataset checkboxes and its node set come from the same filtered
+# rows -- re-deriving the filter there instead would let the two drift apart.
+ASSOCIATIONS_CSV_NAME = "associations.csv"
+
+FDR_SCOPES = ("dataset", "global")
+
+
+def filter_significant_associations(long_df, alpha=0.05, min_n=10, scope="dataset"):
+    """
+    Keep only the (study_id, label_name, refmet_id) rows whose tau is
+    significant after Benjamini-Hochberg correction, returning them with a
+    `q_value` column added.
+
+    min_n is applied FIRST, before the correction. Those rows are excluded a
+    priori for having too little data to estimate anything -- n depends on a
+    metabolite's measurement coverage, not on the realized tau -- so dropping
+    them is not selection on the outcome, and keeping them in the BH family
+    would only cost power for hypotheses that cannot be rejected anyway (at
+    n=3 against a binary label the smallest reachable p is 0.221).
+
+    scope controls the BH family:
+      "dataset" (default) -- correct within each (study_id, label_name) CSV,
+          i.e. treat every study/label contrast as its own experiment, which
+          is what it is: MW's factor coding is study-specific and the studies
+          share neither samples nor assay platform.
+      "global" -- one BH family over every row of every dataset. More
+          conservative, but it mixes 9 independent experiments into one
+          multiplicity correction.
+
+    Note this filters ASSOCIATIONS, not metabolites: a metabolite significant
+    in one study and not in another contributes only the significant row to
+    the weighted tau downstream, which is exactly the selection-on-outcome
+    this filter is -- see the module docstring of the build script.
+    """
+    if scope not in FDR_SCOPES:
+        raise ValueError(f"scope must be one of {FDR_SCOPES}, got {scope!r}")
+
+    testable = long_df.dropna(subset=["kendall_tau"])
+    testable = testable.loc[(testable["n"] >= min_n) & testable["p_value"].notna()].copy()
+    log.info(
+        f"testable rows (n >= {min_n}, tau and p not NaN): {len(testable)} of {len(long_df)}"
+    )
+    if testable.empty:
+        return testable.assign(q_value=pd.Series(dtype=float))
+
+    if scope == "dataset":
+        groups = testable.groupby(["study_id", "label_name"], sort=False)
+        q = pd.concat([_bh(g["p_value"]) for _, g in groups])
+    else:
+        q = _bh(testable["p_value"])
+
+    testable["q_value"] = q.reindex(testable.index)
+    significant = testable.loc[testable["q_value"] < alpha].copy()
+
+    log.info(
+        f"significant rows (BH q < {alpha}, scope={scope}): {len(significant)} "
+        f"of {len(testable)} testable, covering {significant['refmet_id'].nunique()} metabolite(s)"
+    )
+    for (study_id, label_name), group in significant.groupby(["study_id", "label_name"]):
+        tested = int(((testable["study_id"] == study_id) & (testable["label_name"] == label_name)).sum())
+        log.info(f"  {study_id}/{label_name}: {len(group)} of {tested}")
+
+    return significant
+
+
+def _bh(p_values):
+    """Benjamini-Hochberg adjusted p-values, index-aligned to `p_values`."""
+    _reject, q, _a, _b = multipletests(p_values.to_numpy(), method="fdr_bh")
+    return pd.Series(q, index=p_values.index)
+
+
+def save_associations(long_df, output_dir):
+    """Write the association rows a subgraph was built from, for provenance
+    and for build_nafld_network.py to rebuild dataset membership from."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / ASSOCIATIONS_CSV_NAME
+    long_df.to_csv(path, index=False)
+    log.info(f"wrote {len(long_df)} association row(s) -> {path}")
+    return path
+
+
+def load_associations(output_dir):
+    """The association rows saved by save_associations, or None if this
+    subgraph directory holds none (i.e. it was built from all of them)."""
+    path = Path(output_dir) / ASSOCIATIONS_CSV_NAME
+    if not path.exists():
+        return None
+    return pd.read_csv(path)
+
+
 def build_nafld_subgraph(G, weighted_tau):
     """
     Induced subgraph of core graph `G` on nodes in `weighted_tau`'s index
@@ -154,7 +248,11 @@ def save_nafld_subgraph(subG, output_dir=config.NAFLD_SUBGRAPH_DIR):
     log.info(f"nafld subgraph: {subG.number_of_nodes()} nodes, {subG.number_of_edges()} edges -> {output_dir}")
 
 
-def export_nafld_html(G, pos, refmet, dataset_membership, out_path, title_suffix=""):
+DEFAULT_NAFLD_TITLE = "NAFLD subgraph (core network restricted to NAFLD-tested metabolites)"
+
+
+def export_nafld_html(G, pos, refmet, dataset_membership, out_path, title_suffix="",
+                      title=DEFAULT_NAFLD_TITLE):
     """
     Same layout/edge-drawing as network.export_html, plus a floating panel
     (nafld_edge_filter.js) with:
@@ -174,6 +272,9 @@ def export_nafld_html(G, pos, refmet, dataset_membership, out_path, title_suffix
         nafld_n_studies / nafld_total_n (from build_nafld_subgraph).
     dataset_membership : Series, refmet_id -> list[dataset_id], as returned
         by compute_dataset_membership.
+    title : plot title before title_suffix. Overridden by callers exporting a
+        subgraph that is not the full NAFLD-tested set (e.g. the
+        significance-filtered one), so the viewer says which it is.
     """
     node_info = refmet.reindex(pd.Index(G.nodes)).copy()
     node_info["degree"] = pd.Series(dict(G.degree()))
@@ -318,7 +419,7 @@ def export_nafld_html(G, pos, refmet, dataset_membership, out_path, title_suffix
     )
     highlight_trace_index = 2 + num_super_classes + 1 + num_study_groups
     fig.update_layout(
-        title=f"NAFLD subgraph (core network restricted to NAFLD-tested metabolites){title_suffix}",
+        title=f"{title}{title_suffix}",
         showlegend=True,
         legend=dict(title="super_class -- click to toggle, double-click to isolate"),
         xaxis=dict(visible=False),

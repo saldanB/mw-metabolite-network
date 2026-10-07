@@ -11,11 +11,14 @@ sample-size-weighted NAFLD Kendall tau.
 
 Usage:
     python nafld_analysis/build_nafld_network.py [--scenarios abs signed posonly]
+    python nafld_analysis/build_nafld_network.py --output-dir \
+        checkpoints/metabolomics_workbench/nafld_subgraph_significant
 
-Writes, per scenario (suffix "", "_signed", "_posonly"):
-  checkpoints/metabolomics_workbench/nafld_subgraph/graph_distances<suffix>.csv
-  checkpoints/metabolomics_workbench/nafld_subgraph/embedding<suffix>.csv
-  checkpoints/metabolomics_workbench/nafld_subgraph/viewer<suffix>.html
+Writes, per scenario (suffix "", "_signed", "_posonly"), into --output-dir
+(default checkpoints/metabolomics_workbench/nafld_subgraph):
+  graph_distances<suffix>.csv
+  embedding<suffix>.csv
+  viewer<suffix>.html
 """
 
 import argparse
@@ -28,7 +31,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import pandas as pd
 
 from mwnetwork import config
-from mwnetwork.nafld_subgraph import compute_dataset_membership, export_nafld_html, load_nafld_correlations, load_nafld_subgraph
+from mwnetwork.nafld_subgraph import (DEFAULT_NAFLD_TITLE, compute_dataset_membership,
+                                      export_nafld_html, load_associations,
+                                      load_nafld_correlations, load_nafld_subgraph)
 from mwnetwork.network import SCENARIOS, build_positive_subgraph, compute_layout
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -39,12 +44,29 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--scenarios", nargs="+", choices=list(SCENARIOS), default=list(SCENARIOS),
                         help="which distance-transform scenario(s) to (re)generate (default: all)")
+    parser.add_argument("--output-dir", type=Path, default=config.NAFLD_SUBGRAPH_DIR,
+                        help="subgraph directory to read nodes/edges from and write distances, "
+                             f"embedding and viewer into (default: {config.NAFLD_SUBGRAPH_DIR}); "
+                             "point it at nafld_subgraph_significant to get the viewer for the "
+                             "significance-filtered subgraph")
     args = parser.parse_args()
 
-    output_dir = config.NAFLD_SUBGRAPH_DIR
+    output_dir = args.output_dir
     G = load_nafld_subgraph(output_dir)
     refmet = pd.read_csv(config.REFMET_CSV_PATH, index_col="refmet_id")
-    dataset_membership = compute_dataset_membership(load_nafld_correlations())
+
+    # a subgraph built from a subset of the associations ships that subset as
+    # associations.csv -- use it, so the dataset checkboxes offer exactly the
+    # study/label contrasts that actually backed each node's tau instead of
+    # every contrast the metabolite was ever tested in
+    associations = load_associations(output_dir)
+    title = DEFAULT_NAFLD_TITLE
+    if associations is None:
+        associations = load_nafld_correlations()
+    else:
+        log.info(f"using {len(associations)} filtered association row(s) from {output_dir}")
+        title = "NAFLD subgraph, significant associations only"
+    dataset_membership = compute_dataset_membership(associations)
 
     G_pos = None
     for name in args.scenarios:
@@ -60,7 +82,7 @@ def main():
                               direct_fill=cfg["direct_fill"], output_dir=output_dir)
         export_nafld_html(scenario_G, pos, refmet, dataset_membership,
                            Path(output_dir) / f"viewer{cfg['suffix']}.html",
-                           title_suffix=cfg["title_suffix"])
+                           title_suffix=cfg["title_suffix"], title=title)
 
 
 if __name__ == "__main__":

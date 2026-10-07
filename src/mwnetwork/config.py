@@ -21,6 +21,10 @@ COMBINED_DIR = CHECKPOINTS / "correlations_combined"
 CORE_GRAPH_DIR = CHECKPOINTS / "core_graph"
 NAFLD_ANALYSIS_DIR = CHECKPOINTS / "nafld_analysis"
 NAFLD_SUBGRAPH_DIR = CHECKPOINTS / "nafld_subgraph"
+# same subgraph restricted to BH-significant tau associations only
+# (nafld_analysis/build_nafld_significant_subgraph.py) -- kept separate so
+# the unfiltered subgraph and everything derived from it stay untouched
+NAFLD_SIG_SUBGRAPH_DIR = CHECKPOINTS / "nafld_subgraph_significant"
 
 ANALYSIS_IDS_CACHE_PATH = CACHE_DIR / "get_analysis_ids.json"
 METABOLITE_MAP_CACHE_PATH = CACHE_DIR / "analysis_metabolite_refmet.json"
