@@ -74,7 +74,7 @@ def _pool_group(m1, m2, method, g):
 def pool_method(method, min_studies=4, limit=None, overwrite=False,
                  combined_dir=config.COMBINED_DIR, output_dir=config.COMBINED_DIR,
                  progress=None, id_pattern=DEFAULT_ID_PATTERN,
-                 exclude_studies=NAFLD_STUDY_IDS):
+                 exclude_studies=NAFLD_STUDY_IDS, min_n=MIN_N_FOR_Z):
     """
     Pool every eligible metabolite pair for one correlation method.
 
@@ -87,6 +87,21 @@ def pool_method(method, min_studies=4, limit=None, overwrite=False,
         study ids held out of pooling. Defaults to the NAFLD cohorts, which are
         kept out of the core network; pass an empty collection to pool every
         study in the combined file.
+    min_n : int
+        a study-level observation is only allowed to contribute to a pair if it
+        rests on at least this many samples. The default, MIN_N_FOR_Z, keeps
+        every observation pool_correlations can use at all.
+
+        Raising it is a floor on the Fisher weight (n-3) any one study may
+        carry, and it exists for pooling two sources of unequal precision
+        together. A pair's random-effects standard error is roughly
+        sqrt(1/sum(w) + tau2), so a handful of thin, mutually disagreeing
+        observations inflate tau2 and widen the interval on *every* study's
+        contribution to that pair -- including sources that estimated it well
+        on their own. Gating on n is legitimate where gating on the p-value or
+        on tau2 would not be: n is fixed by the study design and is
+        independent of the correlation actually realized, so it selects on
+        precision rather than on the outcome.
     """
     if progress is None:
         progress = lambda it, **kwargs: it
@@ -119,7 +134,13 @@ def pool_method(method, min_studies=4, limit=None, overwrite=False,
         if n_masked:
             log.info(f"{method}: masked {n_masked} excluded study(ies) out of pooling")
 
-    df = df.loc[df["n"] > MIN_N_FOR_Z - 1]  # must match what pool_correlations itself will keep
+    # never below MIN_N_FOR_Z: pool_correlations drops those itself, and a pair
+    # pre-counted as having >= min_studies would then end up with fewer
+    min_n = max(int(min_n), MIN_N_FOR_Z)
+    n_rows = len(df)
+    df = df.loc[df["n"] >= min_n]
+    if min_n > MIN_N_FOR_Z:
+        log.info(f"{method}: min_n={min_n} dropped {n_rows - len(df)} of {n_rows} study-level observation(s)")
     df = df.loc[df["p_value"].notna()]
     df = df.loc[
         df["metabolite_1"].str.match(id_pattern) & df["metabolite_2"].str.match(id_pattern)

@@ -53,21 +53,32 @@ CHEBI_ID_RE = re.compile(r"CHEBI:\s*(\d+)", re.IGNORECASE)
 CHEBI_LABEL = "CHEBI:{accession}"
 # what a combined column must look like, for the pooling filter downstream
 CHEBI_COLUMN_RE = re.compile(r"^CHEBI:\d+$")
+# and what it may look like once refmet_map has re-keyed what it could: a
+# RefMet id where one was resolvable, the original ChEBI label where not. Used
+# as the id_pattern for pooling the two sources together.
+FEATURE_COLUMN_RE = re.compile(r"^(?:CHEBI:\d+|RM\d{7})$")
 
 COMBINED_SUFFIX = "_combined.csv"
 
 
-def chebi_labels(metabolites):
+def chebi_labels(metabolites, label_map=None):
     """
-    {feature id -> "CHEBI:<accession>"} for the features of one MAF that carry
-    one, from its annotation block. Features without a ChEBI id are absent from
-    the mapping rather than mapped to NaN, so the caller drops them by
-    reindexing.
+    {feature id -> column label} for the features of one MAF that carry a ChEBI
+    id, from its annotation block. Features without one are absent from the
+    mapping rather than mapped to NaN, so the caller drops them by reindexing.
 
     The accession is taken out of database_identifier and rebuilt rather than
     used as found: the same id is written "CHEBI:1148", "chebi:1148" and
     "CHEBI: 1148" across studies, and three spellings of one compound would not
     match across studies.
+
+    `label_map` optionally re-keys the result -- {chebi_label -> refmet_id} as
+    refmet_map.build_chebi_refmet_map produces it -- so a study can be combined
+    directly into the identifier space the two sources share. An accession the
+    map does not resolve keeps its ChEBI label and travels on as a first-class
+    feature; it can never collide with a RefMet-keyed one. The map is
+    many-to-one by design, and the resulting duplicate columns are collapsed by
+    maf_to_chebi_matrix, i.e. at the abundance level.
     """
     if "database_identifier" not in metabolites.columns:
         return {}
@@ -76,7 +87,8 @@ def chebi_labels(metabolites):
     for feature_id, raw in metabolites["database_identifier"].fillna("").items():
         found = CHEBI_ID_RE.search(raw)
         if found:
-            labels[feature_id] = CHEBI_LABEL.format(accession=found.group(1))
+            label = CHEBI_LABEL.format(accession=found.group(1))
+            labels[feature_id] = (label_map or {}).get(label, label)
     return labels
 
 
@@ -137,7 +149,7 @@ def _collapse_duplicate_columns(table, label):
     return table.T.groupby(level=0).mean().T
 
 
-def maf_to_chebi_matrix(matrix, metabolites, label="", pqn=True):
+def maf_to_chebi_matrix(matrix, metabolites, label="", pqn=True, label_map=None):
     """
     One MAF's abundance block as samples x ChEBI, dropping features with no
     ChEBI id and collapsing features that share one.
@@ -145,7 +157,7 @@ def maf_to_chebi_matrix(matrix, metabolites, label="", pqn=True):
     `matrix` and `metabolites` are the two tables process_study() produced for
     that MAF, both indexed by feature id.
     """
-    labels = chebi_labels(metabolites)
+    labels = chebi_labels(metabolites, label_map=label_map)
     if not labels:
         return None
 
@@ -182,7 +194,7 @@ def read_maf_tables(study_dir):
 
 def build_combined_study(study_id, studies_dir=config.STUDIES_DIR,
                          output_dir=config.COMBINED_STUDIES_DIR, overwrite=False,
-                         pqn=True):
+                         pqn=True, label_map=None):
     """
     Merge every MAF of `study_id` into one samples x ChEBI CSV and write it to
     {output_dir}/{study_id}_combined.csv.
@@ -200,7 +212,8 @@ def build_combined_study(study_id, studies_dir=config.STUDIES_DIR,
     study_dir = Path(studies_dir) / study_id
     tables, skipped = [], 0
     for stem, matrix, metabolites in read_maf_tables(study_dir):
-        table = maf_to_chebi_matrix(matrix, metabolites, label=stem, pqn=pqn)
+        table = maf_to_chebi_matrix(matrix, metabolites, label=stem, pqn=pqn,
+                                    label_map=label_map)
         if table is None:
             skipped += 1
             continue
@@ -247,14 +260,14 @@ def build_combined_study(study_id, studies_dir=config.STUDIES_DIR,
 
     log.info(
         f"{study_id}: {len(tables)} MAF(s) merged ({skipped} without ChEBI), "
-        f"{merged.shape[0]} samples x {merged.shape[1]} ChEBI id(s) -> {out_path}"
+        f"{merged.shape[0]} samples x {merged.shape[1]} feature(s) -> {out_path}"
     )
     return merged
 
 
 def build_combined_studies(study_ids=None, studies_dir=config.STUDIES_DIR,
                            output_dir=config.COMBINED_STUDIES_DIR, overwrite=False,
-                           progress=True, pqn=True):
+                           progress=True, pqn=True, label_map=None):
     """
     Run build_combined_study() over `study_ids`, or over every study directory
     under `studies_dir` when it is None. Returns the list of study ids written.
@@ -276,7 +289,8 @@ def build_combined_studies(study_ids=None, studies_dir=config.STUDIES_DIR,
     for study_id in iterator:
         try:
             if build_combined_study(study_id, studies_dir=studies_dir, output_dir=output_dir,
-                                    overwrite=overwrite, pqn=pqn) is not None:
+                                    overwrite=overwrite, pqn=pqn,
+                                    label_map=label_map) is not None:
                 written.append(study_id)
         except Exception as e:
             failed.append(study_id)
