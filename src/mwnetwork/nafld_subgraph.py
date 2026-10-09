@@ -23,6 +23,7 @@ import plotly.graph_objects as go
 from statsmodels.stats.multitest import multipletests
 
 from . import config
+from .network import node_table
 from .refmet import crossref_id_text
 from .viewer_search import (SEARCH_FIELD_TAGS, highlight_trace,
                             search_field_index, search_fields)
@@ -235,10 +236,7 @@ def save_nafld_subgraph(subG, output_dir=config.NAFLD_SUBGRAPH_DIR):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    nodes = pd.DataFrame.from_dict(dict(subG.nodes(data=True)), orient="index")
-    nodes.index.name = "node_id"
-    nodes = nodes.reset_index()
-    nodes.to_parquet(output_dir / "nodes.parquet", index=False)
+    node_table(subG).reset_index().to_parquet(output_dir / "nodes.parquet", index=False)
 
     edges = pd.DataFrame(
         [{"source": u, "target": v, **data} for u, v, data in subG.edges(data=True)]

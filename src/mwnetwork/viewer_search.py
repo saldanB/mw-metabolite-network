@@ -123,7 +123,17 @@ def search_fields(refmet_id, row):
     values = []
     for tag, column in SEARCH_FIELDS:
         if column is None:
-            values.append(str(refmet_id))
+            # The node's own label, plus its RefMet id when the two differ.
+            # They differ only for a graph keyed by something else -- the
+            # MetaboLights network's nodes are ChEBI accessions carrying a
+            # mapped refmet_id column -- and there both have to be findable,
+            # so they share this field the way a crossref shares its bare and
+            # prefixed spellings below.
+            mapped = row.get("refmet_id")
+            mapped = "" if mapped is None or pd.isna(mapped) else str(mapped)
+            values.append(
+                f"{refmet_id}|{mapped}" if mapped and mapped != str(refmet_id) else str(refmet_id)
+            )
         elif column in CROSSREF_ID_FIELDS:
             value = ids.get(column, "")
             prefix = CROSSREF_ID_PREFIXES.get(column)

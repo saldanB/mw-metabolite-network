@@ -32,6 +32,11 @@ from .nafld_labels import NAFLD_STUDY_IDS
 
 log = logging.getLogger("mwnetwork.pool")
 
+# What a metabolite label must look like to be poolable. Default is the RefMet
+# id mwnetwork.download resolves; metabolights.combine writes "CHEBI:<digits>"
+# instead, so the pattern is a parameter rather than a literal in the filter.
+DEFAULT_ID_PATTERN = r"^RM\d{7}$"
+
 RANDOM_EFFECT_FIELDS = ["tau2", "z_random", "se_random", "r_random", "ci_r_random_low", "ci_r_random_high"]
 
 
@@ -68,13 +73,20 @@ def _pool_group(m1, m2, method, g):
 
 def pool_method(method, min_studies=4, limit=None, overwrite=False,
                  combined_dir=config.COMBINED_DIR, output_dir=config.COMBINED_DIR,
-                 progress=None):
+                 progress=None, id_pattern=DEFAULT_ID_PATTERN,
+                 exclude_studies=NAFLD_STUDY_IDS):
     """
     Pool every eligible metabolite pair for one correlation method.
 
     progress : optional callable(iterable, total=..., desc=...) -> iterable,
         e.g. tqdm.tqdm, used to report progress over the per-pair pooling
         loop. Defaults to a no-op passthrough.
+    id_pattern : str
+        regex both metabolite labels must match -- see DEFAULT_ID_PATTERN.
+    exclude_studies : collection of str
+        study ids held out of pooling. Defaults to the NAFLD cohorts, which are
+        kept out of the core network; pass an empty collection to pool every
+        study in the combined file.
     """
     if progress is None:
         progress = lambda it, **kwargs: it
@@ -101,15 +113,16 @@ def pool_method(method, min_studies=4, limit=None, overwrite=False,
     df = pd.read_parquet(combined_path)
 
     n_before = df["study_id"].nunique()
-    df = df.loc[~df["study_id"].isin(NAFLD_STUDY_IDS)]
-    n_masked = n_before - df["study_id"].nunique()
-    if n_masked:
-        log.info(f"{method}: masked {n_masked} NAFLD study(ies) out of core-network pooling")
+    if len(exclude_studies):
+        df = df.loc[~df["study_id"].isin(exclude_studies)]
+        n_masked = n_before - df["study_id"].nunique()
+        if n_masked:
+            log.info(f"{method}: masked {n_masked} excluded study(ies) out of pooling")
 
     df = df.loc[df["n"] > MIN_N_FOR_Z - 1]  # must match what pool_correlations itself will keep
     df = df.loc[df["p_value"].notna()]
     df = df.loc[
-        df["metabolite_1"].str.match(r"^RM\d{7}$") & df["metabolite_2"].str.match(r"^RM\d{7}$")
+        df["metabolite_1"].str.match(id_pattern) & df["metabolite_2"].str.match(id_pattern)
     ]
 
     if done_pairs:

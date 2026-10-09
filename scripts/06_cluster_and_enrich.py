@@ -80,7 +80,12 @@ def main():
     G, dist = load_core_graph(distance_suffix=args.distance_suffix)
     cluster_of, _ = cluster_graph(dist, n_clusters=args.n_clusters)
 
-    super_class_by_node = {n: d.get("super_class", "unknown") for n, d in G.nodes(data=True)}
+    # An unannotated node now carries super_class=NaN rather than no key at
+    # all (see network.node_table), so a plain .get default is not enough.
+    super_class_by_node = {
+        n: ("unknown" if pd.isna(d.get("super_class")) else d["super_class"])
+        for n, d in G.nodes(data=True)
+    }
     dendrogram_fig = plot_cluster_dendrogram(dist, cluster_of, super_class_by_node)
     dendrogram_path = config.CORE_GRAPH_DIR / "cluster_dendrogram.html"
     dendrogram_fig.write_html(dendrogram_path)

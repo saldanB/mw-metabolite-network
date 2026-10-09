@@ -112,6 +112,34 @@ def build_positive_subgraph(G):
     return G_pos
 
 
+def largest_component(G):
+    """
+    G restricted to its largest connected component.
+
+    Needed before any dijkstra-based layout: the shortest-path distance between
+    two components is infinite, and TSNE rejects a non-finite matrix with
+    "Input X contains infinity or a value too large for dtype('float64')",
+    which says nothing about the actual cause. Filling those cells with a large
+    finite number instead would be worse -- it invents a distance the data does
+    not support, and places unrelated components at a fabricated separation
+    that the embedding then tries to honour.
+
+    A no-op on an already-connected graph, which is the usual case for the MW
+    core network; the MetaboLights network splits 2172 + 8 + 2.
+    """
+    components = sorted(nx.connected_components(G), key=len, reverse=True)
+    if len(components) <= 1:
+        return G
+
+    dropped = sum(len(c) for c in components[1:])
+    log.info(
+        f"restricting to the largest of {len(components)} connected component(s): "
+        f"{len(components[0])} nodes kept, {dropped} dropped "
+        f"(component sizes {[len(c) for c in components[:6]]})"
+    )
+    return G.subgraph(components[0]).copy()
+
+
 def direct_fill_distances(G, weight):
     """
     Full N x N distance matrix built directly from edge data, no shortest-path
@@ -150,8 +178,38 @@ def compute_layout(G, weight="distance", suffix="", direct_fill=False, write=Tru
     return pos
 
 
-def annotate_and_save_graph(G, refmet_path=config.REFMET_CSV_PATH, output_dir=config.CORE_GRAPH_DIR):
-    refmet = pd.read_csv(refmet_path, index_col="refmet_id")
+def node_table(G):
+    """
+    One row per node in G, indexed by node id ("node_id"), columns = the union
+    of the node attributes.
+
+    Not `DataFrame.from_dict(dict(G.nodes(data=True)), orient="index")`: that
+    silently DROPS every node whose attribute dict is empty, so a graph with
+    unannotated nodes loses them from the node table while keeping them in
+    edges.parquet. It cost the MetaboLights network 526 of its 2183 nodes --
+    ChEBI accessions with no RefMet row -- and the MW network nothing, since
+    every RefMet-keyed node is annotated by construction. Unannotated nodes
+    come back here as all-NaN rows, which is what a consumer reindexing on the
+    edge list would have produced anyway.
+    """
+    node_ids = list(G.nodes())
+    return pd.DataFrame(
+        [dict(G.nodes[n]) for n in node_ids],
+        index=pd.Index(node_ids, name="node_id"),
+    )
+
+
+def annotate_and_save_graph(G, refmet_path=config.REFMET_CSV_PATH, output_dir=config.CORE_GRAPH_DIR,
+                            refmet=None):
+    """
+    `refmet` accepts an already-built annotation frame instead of a path, for a
+    graph whose nodes are not RefMet ids -- the MetaboLights network is keyed by
+    ChEBI accession, so metabolights.network re-indexes the same RefMet columns
+    by "CHEBI:<accession>" and passes the result in here. It must be indexed by
+    whatever G's nodes are, and carry the columns export_html reads.
+    """
+    if refmet is None:
+        refmet = pd.read_csv(refmet_path, index_col="refmet_id")
     for node in G.nodes():
         for col in refmet.columns:
             if node in refmet.index:
@@ -160,12 +218,14 @@ def annotate_and_save_graph(G, refmet_path=config.REFMET_CSV_PATH, output_dir=co
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     nx.to_pandas_edgelist(G).to_parquet(output_dir / "edges.parquet")
-    pd.DataFrame.from_dict(dict(G.nodes(data=True)), orient="index") \
-        .reset_index().rename(columns={"index": "node_id"}).to_parquet(output_dir / "nodes.parquet")
+    node_table(G).reset_index().to_parquet(output_dir / "nodes.parquet")
     return refmet
 
 
-def export_html(G, pos, refmet, out_path, title_suffix=""):
+DEFAULT_TITLE = "Metabolite correlation network (pooled random-effects r, CI-significant edges only)"
+
+
+def export_html(G, pos, refmet, out_path, title_suffix="", title=None):
     node_info = refmet.reindex(pd.Index(G.nodes)).copy()
     node_info["degree"] = pd.Series(dict(G.degree()))
     node_info["super_class"] = node_info["super_class"].fillna("unknown")
@@ -191,8 +251,18 @@ def export_html(G, pos, refmet, out_path, title_suffix=""):
         for refmet_id, row in sub.iterrows():
             x, y = round(float(pos[refmet_id][0]), 4), round(float(pos[refmet_id][1]), 4)
             ids = crossref_id_text(row)
+            # A graph not keyed by RefMet id (the MetaboLights network is keyed
+            # by ChEBI accession) carries the mapped RefMet id as a column; show
+            # it, or the only identifier on the tooltip is one the rest of the
+            # project does not use as a key.
+            mapped = row.get("refmet_id")
+            refmet_line = (
+                f"refmet_id: {mapped}<br>"
+                if mapped is not None and not pd.isna(mapped) and str(mapped) != str(refmet_id)
+                else ""
+            )
             hover_text = (
-                f"{refmet_id}<br>{row.refmet_name}<br>super_class: {row.super_class}"
+                f"{refmet_id}<br>{refmet_line}{row.refmet_name}<br>super_class: {row.super_class}"
                 f"<br>main_class: {row.main_class}<br>sub_class: {row.sub_class}"
                 f"<br>formula: {row.formula}<br>degree: {row.degree}"
                 + (f"<br>{ids}" if ids else "")
@@ -249,7 +319,7 @@ def export_html(G, pos, refmet, out_path, title_suffix=""):
     fig = go.Figure(data=[edge_trace_pos, edge_trace_neg] + node_traces + [highlight_trace()])
     highlight_trace_index = 2 + num_super_classes
     fig.update_layout(
-        title=f"Metabolite correlation network (pooled random-effects r, CI-significant edges only){title_suffix}",
+        title=f"{title or DEFAULT_TITLE}{title_suffix}",
         showlegend=True,
         legend=dict(title="super_class -- click to toggle, double-click to isolate"),
         xaxis=dict(visible=False),
@@ -293,12 +363,13 @@ def export_html(G, pos, refmet, out_path, title_suffix=""):
 
 
 def build_network(scenarios=None, pooled_path=None, refmet_path=config.REFMET_CSV_PATH,
-                    output_dir=config.CORE_GRAPH_DIR):
+                    output_dir=config.CORE_GRAPH_DIR, refmet=None, title=None):
     scenarios = scenarios or list(SCENARIOS)
     pooled_path = pooled_path or (config.COMBINED_DIR / "pearson_pooled.parquet")
 
     G = build_graph(pooled_path)
-    refmet = annotate_and_save_graph(G, refmet_path=refmet_path, output_dir=output_dir)
+    refmet = annotate_and_save_graph(G, refmet_path=refmet_path, output_dir=output_dir,
+                                     refmet=refmet)
 
     G_pos = None
     for name in scenarios:
@@ -310,5 +381,13 @@ def build_network(scenarios=None, pooled_path=None, refmet_path=config.REFMET_CS
         else:
             scenario_G = G
 
+        # Only the dijkstra scenarios need a connected graph. "signed" fills
+        # non-adjacent pairs with the neutral r=0 distance instead of
+        # propagating, so a disconnected graph is already finite there and
+        # every node can keep its place.
+        if not cfg["direct_fill"]:
+            scenario_G = largest_component(scenario_G)
+
         pos = compute_layout(scenario_G, weight=cfg["weight"], suffix=cfg["suffix"], direct_fill=cfg["direct_fill"], output_dir=output_dir)
-        export_html(scenario_G, pos, refmet, Path(output_dir) / f"viewer{cfg['suffix']}.html", title_suffix=cfg["title_suffix"])
+        export_html(scenario_G, pos, refmet, Path(output_dir) / f"viewer{cfg['suffix']}.html",
+                    title_suffix=cfg["title_suffix"], title=title)
